@@ -1,0 +1,218 @@
+---
+title: "seasonal_part_nogarch"
+author: "He Congxin"
+date: "2024-05-02"
+output: html_document
+---
+
+
+# Weekly
+
+```{r}
+finance_weekly <- read.csv("~/Desktop/hkust/24-25Spring/Time series/project/finance_weekly.csv")[[2]]
+finance_weekly=ts(na.omit(finance_weekly), frequency=52, start=c(2020,2,1))
+plot(finance_weekly,ylab="finance_weekly_close",type="l")
+
+```
+
+
+
+```{r}
+finance_weekly_logreturn=diff(log(finance_weekly))
+```
+
+```{r}
+finance_weekly_logreturn=ts(finance_weekly_logreturn, frequency=52, start=c(2020,3,1)) 
+#finance_monthly=ts(finance_monthly, frequency=12, start=c(2020,2)) 
+plot(finance_weekly_logreturn,ylab="finance_weekly_log_return")
+```
+
+
+
+
+
+```{r}
+mcomponents <- decompose(finance_weekly_logreturn)
+plot(mcomponents)
+```
+
+```{r}
+hist(finance_weekly_logreturn,breaks = 20)
+```
+
+
+```{r}
+mean(((finance_weekly_logreturn-mean(finance_weekly_logreturn))/sd(finance_weekly_logreturn))^3)
+```
+
+```{r}
+mean(((finance_weekly_logreturn-mean(finance_weekly_logreturn))/sd(finance_weekly_logreturn))^4)
+```
+
+```{r}
+epsilon_t=finance_weekly_logreturn-mean(finance_weekly_logreturn)
+ x<-na.omit(epsilon_t)
+ x<-x+0.0000000000000001*rnorm(length(x),0,1)
+ks.test(x,"pnorm",mean=mean(x),sd=sd(x))
+```
+
+
+```{r}
+library("Rfast")
+library("ramify")
+library("LambertW")
+
+x<-na.omit(finance_weekly_logreturn) #Store the target data 
+x<-na.omit(x)           #remove "NA" in the dataset
+x<-as.matrix(x)         #ensure that the data is in matrix form
+df=seq(20,100,0.001)       #set the range of degree of freedom (e.g. df=[2,2.001,...,8])
+n=length(df)            
+loglik=rep(0,n)         #Used to store the value of loglikelihood function for different level of df
+for(i in 1:n){
+  fitres=mvt.mle(x,v=df[i])
+  loglik[i]=fitres$loglik
+}                   #For each df, calculate the MLE and loglikelihood function
+loglik<-as.matrix(loglik)
+dfmax=df[argmax(loglik,rows=FALSE)] #Find the maximizier(optimal df)
+fitMLE=mvt.mle(x,v=dfmax) #Estimate the MLE of the parameters
+
+m<-fitMLE$location            #m=mu (location)
+s<-sqrt(fitMLE$scatter[1,1])  #s=lambda (scale parameter)
+print(m)
+print(s)
+print(dfmax)
+
+ks_test_t(x,c(location=m,scale=s,df=dfmax)) #do the testing using ks.test
+```
+
+
+```{r}
+library(nortest)
+x<-na.omit(finance_weekly_logreturn)
+ ad.test(x)
+```
+
+
+```{r}
+library(goftest)
+x<-na.omit(finance_weekly_logreturn)
+x2=(x-m)/s
+ad.test(x2,null = "pt",df=dfmax)
+```
+
+
+```{r}
+week_logreturn=diff(finance_weekly_logreturn,52)
+```
+
+```{r}
+library(fUnitRoots)
+adfTest(week_logreturn)
+```
+
+
+```{r}
+acf(week_logreturn,lag=12)
+```
+
+```{r}
+pacf(week_logreturn,lag=12)
+```
+
+
+
+```{r}
+library(forecast)
+auto.arima(week_logreturn)
+```
+
+
+```{r}
+model_arma1=arima(week_logreturn, order = c(0,0,0),seasonal = list(order = c(0,0,1),  period = 52),include.mean = F)
+model_arma1
+```
+```{r}
+forecast=predict(model_arma1,9)
+forecast
+```
+
+
+```{r}
+U=forecast$pred +1.96 * forecast$se
+L=forecast$pred - 1.96 * forecast$se
+
+
+
+fore1=(forecast$pred+forecast$se*forecast$se/2)
+U1=U
+L1=L
+fore1
+
+
+```
+
+```{r}
+weekly_true <- read.delim("~/Desktop/hkust/24-25Spring/Time series/project/weekly_true.txt", header=FALSE)[[2]]
+```
+
+```{r}
+plot(1:9,fore1,type="o", ylim=c(-0.1,0.15),ylab="",xlab="",main="Forecasting")
+lines(1:9,weekly_true,type="o",col="red")
+lines(1:9, U,type="l",col="blue")
+lines(1:9, L,type="l",col="blue")
+legend(x="topleft",c("True returns","prediction"),lty=c(1,1),pch=c(1,1),col=c("red","black"))
+```
+
+
+```{r}
+model_arma2=arima(week_logreturn, order = c(0,0,0),seasonal = list(order = c(1,0, 0),  period = 52),include.mean = F)
+model_arma2
+```
+
+
+```{r}
+model_arma3=arima(week_logreturn, order = c(1,0,1),seasonal = list(order = c(0,0, 1),  period = 52),include.mean = F)
+model_arma3
+```
+
+
+```{r}
+model_arma4=arima(week_logreturn, order = c(3,0,3),seasonal = list(order = c(1,0, 0),  period = 52),include.mean = F
+                  ,fixed = c(NA,NA,NA,NA,0,NA,NA)
+                  )
+model_arma4
+```
+
+
+```{r}
+Box.test(model_arma4$residuals,lag = 12,type = "Ljung")
+```
+
+```{r}
+pv1=1-pchisq(3.0644,7)
+pv1
+```
+
+
+```{r}
+week_logreturn2=week_logreturn-mean(week_logreturn)
+Box.test(week_logreturn^2,lag = 10,type = "Ljung")
+```
+
+
+
+
+## residual
+
+```{r}
+residuals_fina=residuals(model_arma1,standardize=T)
+```
+
+```{r}
+library(openxlsx)
+write.xlsx(residuals_fina, "~/Desktop/hkust/24-25Spring/Time series/project/residuals_finance.xls",
+         sheetName = "residuals_finance", append = TRUE)
+```
+
+
+

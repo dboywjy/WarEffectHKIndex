@@ -1,0 +1,643 @@
+---
+title: "project_ts"
+author: "He Congxin"
+date: "2024-04-27"
+output: html_document
+---
+
+# ARIMA
+
+```{r}
+energy_after <- read.table("~/Desktop/hkust/24-25Spring/Time series/project/energy_after.txt", quote="\"", comment.char="")[,2]
+```
+
+```{r}
+energy_after_log=diff(log(energy_after))
+```
+
+```{r}
+energy_after_plot=ts(energy_after, frequency=365, start=c(2022,3,1)) 
+plot(energy_after_plot,type="l")
+```
+```{r}
+energy_after_log_plot=ts(energy_after_log, frequency=365, start=c(2022,3,1)) 
+plot(energy_after_log_plot,type="l")
+```
+```{r}
+hist(energy_after_log,breaks = 20)
+```
+```{r}
+mean(((energy_after_log-mean(energy_after_log))/sd(energy_after_log))^3)
+```
+
+```{r}
+mean(((energy_after_log-mean(energy_after_log))/sd(energy_after_log))^4)
+```
+
+```{r}
+acf(energy_after_log,lag=12)
+```
+
+```{r}
+pacf(energy_after_log,lag=12)
+```
+
+
+```{r}
+Box.test(energy_after_log,lag = 12,type = "Ljung")
+```
+
+
+```{r}
+library(fUnitRoots)
+adfTest(energy_after_log)
+```
+
+```{r}
+library(forecast)
+auto.arima(energy_after_log)
+```
+
+```{r}
+model_arma=arima(energy_after_log, c(2,0, 2))
+model_arma
+```
+
+
+```{r}
+model_arma=arima(energy_after_log, c(2, 0, 2),include.mean = F)
+model_arma
+```
+```{r}
+phi0=(1-0.9693-0.5271)*mean(energy_after_log)
+phi0
+```
+
+```{r}
+Box.test(model_arma$residuals,lag = 12,type = "Ljung")
+```
+
+```{r}
+pv1=1-pchisq(5.9041,8)
+pv1
+```
+
+
+```{r}
+model_arma1=arima(energy_after_log, c(1,0, 2),include.mean = F)
+model_arma1
+Box.test(model_arma1$residuals,lag = 12,type = "Ljung")
+```
+
+
+```{r}
+pv1=1-pchisq(0.6386,9)
+pv1
+```
+
+
+```{r}
+model_arma2=arima(energy_after_log, c(2,0, 1),include.mean = F)
+model_arma2
+Box.test(model_arma2$residuals,lag = 12,type = "Ljung")
+```
+
+
+```{r}
+pv1=1-pchisq(10.813,9)
+pv1
+```
+
+```{r}
+model_arma3=arima(energy_after_log, c(3,0, 3),include.mean = F
+                  #,fixed = c(0,0,0,0,0,NA)
+                  )
+model_arma3
+Box.test(model_arma3$residuals,lag = 12,type = "Ljung")
+```
+
+
+```{r}
+pv1=1-pchisq(3.3943,6)
+pv1
+```
+
+
+```{r}
+energy_residuals=model_arma$residuals
+```
+
+
+
+## checking distribution
+
+### KS-test 
+
+```{r}
+epsilon_t=energy_residuals-mean(energy_residuals)
+ x<-na.omit(epsilon_t)
+ x<-x+0.0000000000000001*rnorm(length(x),0,1)
+ks.test(x,"pnorm",mean=mean(x),sd=sd(x))
+```
+
+
+
+```{r}
+library("Rfast")
+library("ramify")
+library("LambertW")
+
+x<-na.omit(energy_residuals) #Store the target data 
+x<-na.omit(x)           #remove "NA" in the dataset
+x<-as.matrix(x)         #ensure that the data is in matrix form
+df=seq(2,8,0.001)       #set the range of degree of freedom (e.g. df=[2,2.001,...,8])
+n=length(df)            
+loglik=rep(0,n)         #Used to store the value of loglikelihood function for different level of df
+for(i in 1:n){
+  fitres=mvt.mle(x,v=df[i])
+  loglik[i]=fitres$loglik
+}                   #For each df, calculate the MLE and loglikelihood function
+loglik<-as.matrix(loglik)
+dfmax=df[argmax(loglik,rows=FALSE)] #Find the maximizier(optimal df)
+fitMLE=mvt.mle(x,v=dfmax) #Estimate the MLE of the parameters
+
+m<-fitMLE$location            #m=mu (location)
+s<-sqrt(fitMLE$scatter[1,1])  #s=lambda (scale parameter)
+print(m)
+print(s)
+print(dfmax)
+
+ks_test_t(x,c(location=m,scale=s,df=dfmax)) #do the testing using ks.test
+```
+
+### AD-test
+
+```{r}
+library(nortest)
+x<-na.omit(energy_residuals)
+ ad.test(x)
+```
+
+
+```{r}
+library(goftest)
+x<-na.omit(energy_residuals)
+x2=(x-m)/s
+ad.test(x2,null = "pt",df=dfmax)
+```
+
+
+
+
+
+# GARCH
+
+
+## Test 
+
+```{r}
+energy_after_log2=energy_after_log-mean(energy_after_log)
+Box.test(energy_after_log2^2,lag = 10,type = "Ljung")
+```
+
+
+
+## GARCH(1,1)-std
+
+```{r}
+library(fGarch)
+model_1=garchFit(w2~arma(2,2)+garch(1,1),data=energy_after_log,trace=F,cond.dist = c("std"),include.mean = F)
+#,fitted.values=c(0,0,0,NA,0,NA,NA)
+#setfixed(model_1)<-list(mu=0,ma1=0,ma2=0,omega=0)
+summary(model_1)
+
+res1=residuals(model_1,standardize=T)
+Box.test(res1,10,type="Ljung")
+Box.test(res1^2,10,type="Ljung")
+```
+
+```{r}
+pv1=1-pchisq(7.429,6)
+pv1
+pv2=1-pchisq(8.3748,6)
+pv2
+```
+
+
+
+
+
+
+## GARCH (2,1)-std
+
+```{r}
+model_2=garchFit(energy_after_log~arma(2,2)+garch(2,1),data=energy_after_log,trace=F,cond.dist = c("std"),include.mean = F)
+summary(model_2)
+res2=residuals(model_2,standardize=T)
+Box.test(res2,10,type="Ljung")
+Box.test(res2^2,10,type="Ljung")
+```
+
+```{r}
+pv1=1-pchisq(7.4838,6)
+pv1
+pv2=1-pchisq(8.5024,6)
+pv2
+```
+
+
+
+## s- GARCH
+
+```{r}
+library(rugarch)
+
+spec_s=ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1,1)),mean.model = list(armaOrder = c(2,2), include.mean = F),distribution.model = "std")
+#setfixed(spec_s)<-list(mu=0)
+
+model_s=ugarchfit(spec=spec_s,data=energy_after_log)
+model_s  ### see output
+
+res_s=residuals(model_s,standardize=T)
+Box.test(res_s,10,type="Ljung")
+Box.test(res_s^2,10,type="Ljung")
+```
+
+```{r}
+pv1=1-pchisq(9.7223,6)
+pv1
+pv2=1-pchisq(8.0797,6)
+pv2
+```
+
+
+
+## GARCH-M
+
+```{r}
+library(rugarch)
+
+spec_s=ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1,1)),mean.model = list(armaOrder = c(2,2), include.mean = T,archm=T,archpow=1),distribution.model = "std")
+#setfixed(spec_s)<-list(mu=0,ma1=0,ma2=0,omega=0,archm=0)
+
+model_s=ugarchfit(spec=spec_s,data=energy_after_log)
+model_s  ### see output
+
+res_s=residuals(model_s,standardize=T)
+Box.test(res_s,10,type="Ljung")
+Box.test(res_s^2,10,type="Ljung")
+```
+
+
+```{r}
+pv1=1-pchisq(9.9916,5)
+pv1
+pv2=1-pchisq(12.649,5)
+pv2
+```
+
+
+## i- GARCH
+
+```{r}
+library(rugarch)
+
+spec_i=ugarchspec(variance.model = list(model = "iGARCH", garchOrder = c(1,1)),mean.model = list(armaOrder = c(2,2), include.mean = F),distribution.model = "std")
+setfixed(spec_i)<-list(omega=0,ar2=0,ma2=0)
+
+model_i=ugarchfit(spec=spec_i,data=energy_after_log)
+model_i  ### see output
+
+res_i=residuals(model_i,standardize=T)
+Box.test(res_i,10,type="Ljung")
+Box.test(res_i^2,10,type="Ljung")
+```
+```{r}
+pv1=1-pchisq(15.243,6)
+pv1
+pv2=1-pchisq(15.961,6)
+pv2
+```
+
+
+## e- GARCH
+
+```{r}
+library(rugarch)
+
+spec_e=ugarchspec(variance.model = list(model = "eGARCH", garchOrder = c(1,1)),mean.model = list(armaOrder = c(2,2), include.mean=F),distribution.model = "std")
+#setfixed(spec_e)<-list(ma2=0)
+model_e=ugarchfit(spec=spec_e,data=energy_after_log)
+model_e  ### see output
+
+res_e=residuals(model_e,standardize=T)
+Box.test(res_e,10,type="Ljung")
+Box.test(res_e^2,10,type="Ljung")
+```
+```{r}
+pv1=1-pchisq(5.0642,6)
+pv1
+pv2=1-pchisq(7.1695,6)
+pv2
+```
+
+
+## gjr- GARCH
+
+```{r}
+library(rugarch)
+
+spec_gjr=ugarchspec(variance.model = list(model = "gjrGARCH", garchOrder = c(1,1)),mean.model = list(armaOrder = c(2,2), include.mean = F),distribution.model = "std")
+setfixed(spec_gjr)<-list(omega=0,gamma1=0,beta1=0)
+
+model_gjr=ugarchfit(spec=spec_gjr,data=energy_after_log)
+model_gjr  ### see output
+
+res_gjr=residuals(model_gjr,standardize=T)
+Box.test(res_gjr,10,type="Ljung")
+Box.test(res_gjr^2,10,type="Ljung")
+```
+
+
+```{r}
+pv1=1-pchisq(4.7909,6)
+pv1
+pv2=1-pchisq(1.7757,6)
+pv2
+```
+
+
+## ap- ARCH
+```{r}
+library(rugarch)
+
+spec_ap=ugarchspec(variance.model = list(model = "apARCH", garchOrder = c(1,1)),mean.model = list(armaOrder = c(2,2), include.mean = F),distribution.model = "std")
+setfixed(spec_ap)<-list(omega=0,gamma1=0)
+
+model_ap=ugarchfit(spec=spec_ap,data=energy_after_log)
+model_ap  ### see output
+
+res_ap=residuals(model_ap,standardize=T)
+Box.test(res_ap,10,type="Ljung")
+Box.test(res_ap^2,10,type="Ljung")
+```
+
+```{r}
+pv1=1-pchisq(8.2092,6)
+pv1
+pv2=1-pchisq(10.372,6)
+pv2
+```
+
+
+
+
+## cs- GARCH
+```{r}
+library(rugarch)
+
+spec_cs=ugarchspec(variance.model = list(model = "csGARCH", garchOrder = c(1,1)),mean.model = list(armaOrder = c(2,2), include.mean = F),distribution.model = "std")
+setfixed(spec_cs)<-list(omega=0,eta21=0)
+
+model_cs=ugarchfit(spec=spec_cs,data=energy_after_log)
+model_cs  ### see output
+
+res_cs=residuals(model_cs,standardize=T)
+Box.test(res_cs,10,type="Ljung")
+Box.test(res_cs^2,10,type="Ljung")
+```
+
+
+```{r}
+pv1=1-pchisq(12.263,6)
+pv1
+pv2=1-pchisq(17.853,6)
+pv2
+```
+
+
+## fi- GARCH
+```{r}
+library(rugarch)
+
+spec_fi=ugarchspec(variance.model = list(model = "fiGARCH", garchOrder = c(1,1)),mean.model = list(armaOrder = c(2,2), include.mean = F),distribution.model = "std")
+setfixed(spec_fi)<-list(ar1=0,ar2=0,ma1=0,ma2=0,omega=0)
+
+model_fi=ugarchfit(spec=spec_fi,data=energy_after_log)
+model_fi  ### see output
+
+res_fi=residuals(model_fi,standardize=T)
+Box.test(res_fi,10,type="Ljung")
+Box.test(res_fi^2,10,type="Ljung")
+```
+
+
+```{r}
+pv1=1-pchisq(13.502,6)
+pv1
+pv2=1-pchisq(8.6699,6)
+pv2
+```
+
+## stochastic
+
+```{r}
+library(stochvol)
+fit <- svsample(energy_after_log, priormu = c(mean(energy_after_log), 0.01))
+summary(fit)
+```
+```{r}
+plot(fit)
+```
+
+
+```{r}
+forecast=predict(model_s, n.ahead = 9, trace = FALSE, mse = c("cond","uncond"),
+                      plot=TRUE, nx=NULL, crit_val=NULL, conf=NULL)
+
+forecast
+```
+
+
+## TAR
+
+```{r}
+#method 2: scatter-line plot
+library("quantmod")
+library("tsDyn")
+library("stats")
+library("nonlinearTseries")
+library("datasets")
+library("NTS")
+{#par(mfrow=c(2,2))
+  scatter.smooth(Lag(energy_after_log, 1), energy_after_log, span = 2/3, degree = 1,
+                 family = c("symmetric", "gaussian"), evaluation = 50, 
+  xlab = "t-1", ylab = "t")
+  scatter.smooth(Lag(energy_after_log, 2), energy_after_log, span = 2/3, degree = 1,
+                 family = c("symmetric", "gaussian"), evaluation = 50, 
+  xlab = "t-2", ylab = "t")
+  scatter.smooth(Lag(energy_after_log, 3), energy_after_log, span = 2/3, degree = 1,
+                 family = c("symmetric", "gaussian"), evaluation = 50, 
+  xlab = "t-3", ylab = "t")
+  scatter.smooth(Lag(energy_after_log, 4), energy_after_log, span = 2/3, degree = 1,
+                 family = c("symmetric", "gaussian"), evaluation = 50, 
+  xlab = "t-4", ylab = "t")
+}
+```
+
+```{r}
+#method3: statistical test:
+#Sometimes however it happens so, that it’s not that simple to decide whether this type of nonlinearity is present. In this case, we’d have to run a statistical test — this approach is the most recommended by both Hansen’s and Tsay’s procedures. In order to do it, however, it’s good to first establish what lag order we are more or less talking about. We will use Average Mutual Information for this, and we will limit the order to its first local minimum
+mutualInformation(energy_after_log)
+```
+```{r}
+# checking the order
+## Method 1:
+for (d in 1:3){
+  for (p in 1:3){
+    test_result <- thr.test(energy_after_log, p=p, d=d)
+    F_ratio <- test_result$F.ratio
+    df1 <- test_result$df[1]
+    df2 <- test_result$df[2]
+    p_value <- 1 - pf(F_ratio, df1, df2)  # 计算 p-value
+    cat("p = ", p, " d = ", d, " F-ratio = ", F_ratio, " P-value = ", p_value, "\n")
+  }
+}
+
+```
+SETAR(1,3), SETAR(2,3)
+
+```{R}
+## Method 2:
+setarTest(energy_after_log, m=3, nboot=400)
+setarTest(energy_after_log, m=3, nboot=400, test='2vs3')
+```
+
+
+
+```{R}
+# Identify mL(order of Lower) mH(order of Higher) thDelay(lag of threshold) th(threshold result) pooled-AIC(AIC part result)
+selectSETAR(energy_after_log, m=3, thDelay=1:2)
+```
+
+```{R}
+tarmodel <- setar(energy_after_log, mL=1, mH=1, thDelay = 2, th=-0.007462866)
+summary(tarmodel)
+```
+
+
+```{R}
+#Model Checking
+residuals<-residuals(tarmodel,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20-4)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+```{R}
+tarmodel <- setar(energy_after_log, mL=1, mH=1, thDelay = 3, th=0)
+summary(tarmodel)
+```
+
+
+```{r}
+#Model Checking
+residuals<-residuals(tarmodel,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20-5)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+```{R}
+tarmodel <- setar(energy_after_log, mL=2, mH=1, thDelay = 3, th=0)
+summary(tarmodel)
+```
+
+
+```{r}
+#Model Checking
+residuals<-residuals(tarmodel,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20-5)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+
+
+```{R}
+tarmodel <- setar(energy_after_log, mL=1, mH=2, thDelay = 3, th=0)
+summary(tarmodel)
+```
+
+
+```{r}
+#Model Checking
+residuals<-residuals(tarmodel,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20-5)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+
+```{R}
+tarmodel <- setar(energy_after_log, mL=2, mH=2, thDelay = 3, th=0)
+summary(tarmodel)
+```
+
+
+```{r}
+#Model Checking
+residuals<-residuals(tarmodel,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20-5)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+
+## residual
+
+```{r}
+residuals_energy=residuals(model_s,standardize=T)
+```
+
+```{r}
+library(openxlsx)
+write.xlsx(residuals_energy, "~/Desktop/hkust/24-25Spring/Time series/project/residuals.xls",
+         sheetName = "residuals_energy", append = TRUE)
+```
+
