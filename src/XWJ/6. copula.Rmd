@@ -1,0 +1,80 @@
+---
+title: "Copula Construction"
+output: html_document
+date: "2024-04-30"
+---
+
+```{r}
+#Import Dataset
+library(readxl)
+Finance_Index_After_Event <- read_excel("C:/Users/20117/Desktop/Time Series Project/Finance Index After Event.xlsx")
+
+Finance_Index_After_Event<- na.omit(Finance_Index_After_Event)
+#Simple Return to Log Return
+close_prices=Finance_Index_After_Event[[2]]
+log_return=diff(log(close_prices))
+
+library(rugarch)
+spec8<-ugarchspec(variance.model=list(model="gjrGARCH",garchOrder=c(1,1)),mean.model=list(armaOrder=c(0,0),include.mean=FALSE),distribution.model="std")
+m8<-ugarchfit(spec=spec8,data=log_return)
+print(m8)
+
+#Model Checking
+financial_residuals<-residuals(m8,standardize=TRUE)
+
+```
+
+```{r}
+energy_after <- read_excel("C:/Users/20117/Desktop/Time Series Project/energy_after.xlsx")
+energy_after<-na.omit(energy_after)
+#Simple Return to Log Return
+close_prices=energy_after[[2]]
+energy_after_log=diff(log(close_prices))
+
+library(rugarch)
+
+spec_e=ugarchspec(variance.model = list(model = "eGARCH", garchOrder = c(1,1)),mean.model = list(armaOrder = c(0,3), include.mean =T),distribution.model = "std")
+setfixed(spec_e)<-list(ma2=0)
+model_e=ugarchfit(spec=spec_e,data=energy_after_log)
+model_e  ### see output
+
+energy_residuals=residuals(model_e,standardize=T)
+
+```
+```{r}
+
+u1<-pstd(financial_residuals,0,1,nu=coef(m8)[[length(coef(m8))]])
+u2<-pstd(energy_residuals,0,1,nu=coef(model_e)[[length(coef(model_e))]])#概率积分转换
+#psstd(q, mean = 0, sd = 1, nu = 5, xi = 1.5)
+#nu为偏t分布的自由度，xi为偏度系数
+
+x1<-as.matrix(u1)
+x2<-as.matrix(u2)
+ks.test(x1,'punif')
+ks.test(x2,'punif')
+#K-S检验,原假设为u1、u2服从均匀分布
+
+z=runif(100)
+qqplot(x1,z)
+qqplot(x2,z)
+
+```
+
+
+
+```{r}
+Cop1=BiCopSelect(u1,u2,familyset = c(9),se =TRUE, rotations = FALSE)
+#Copula估计，se表示计算标准误， rotation表示是否考虑旋转Copula，选择标准默认是AIC
+#familyset是copula类型集合，主要是选择几种常见的copula族（norm t clayton gumbel frank SJC）
+summary(Cop1)#查看估计结果
+#对于依赖参数和尾部相关系数、秩相关系数间的转换，可以使用BiCopPar2TailDep和BiCopPar2Tau函数
+```
+
+
+
+```{r}
+meanModel<-list(armaOrder=c(0,0),include.mean=F)
+varModel<-list(model="gjrGARCH",garchOrder=c(1,1))
+uspec<-ugarchspec(varModel, mean.model = meanModel, distribution.model = "std")
+fit<-apply(log_return,2,function(x) ugarchfit(uspec,data=log_return))
+```

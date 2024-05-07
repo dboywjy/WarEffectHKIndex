@@ -1,0 +1,821 @@
+---
+title: "Finance&After Event"
+output: html_document
+date: "2024-04-25"
+---
+
+【要分train和testing】
+【具体是哪个distribution还是要确定吧】
+
+```{r setup, include=FALSE}
+#Import Dataset
+library("quantmod")
+library("tsDyn")
+library("stats")
+library("nonlinearTseries")
+library("datasets")
+library("NTS")
+library(readxl)
+Finance_Index_After_Event <- read_excel("C:/Users/20117/Desktop/Time Series Project/Finance Index After Event.xlsx")
+
+Finance_Index_After_Event<- na.omit(Finance_Index_After_Event)
+
+
+#Date
+date_strings<-Finance_Index_After_Event[[1]]
+dates<-as.Date(date_strings,format="%Y-%m-%d")
+
+#Visualization
+plot(dates,Finance_Index_After_Event[[2]])
+lines(dates,Finance_Index_After_Event[[2]])
+
+```
+Not Stationary need to do some transformation. Overall, it is deceasing generally. But during the process, there is a big jump and a strong rebound.
+```{r}
+
+#Simple Return to Log Return
+close_prices=Finance_Index_After_Event[[2]]
+log_return=diff(log(close_prices))
+dates=dates[2:length(dates)]
+#Visualization
+plot(dates,log_return)
+lines(dates,log_return)#non-zero mean #It does not have any trends>>does not need to choose c
+
+```
+```{r}
+#Step 1: Checking Seasonality
+library(forecast)
+ts_log_return<-ts(log_return,start=c(dates[1]),frequency=250)
+seasonplot(ts_log_return)
+monthplot(ts_log_return, xlab="", ylab="")
+```
+Because it's daily return, that means there is no seasonality analysis in thoughts.
+
+```{r}
+#Step 2: Checking Stationary
+library(fUnitRoots)
+adfTest(log_return,lags=30,type=c('c'),title=NULL,description=NULL)#c~because with constant term and no trend
+```
+p=0.01<0.05>> we could reject H0>>there is no unit root>>there is no it is stationary right now
+
+```{r}
+#Step 3: Test ARCH Effect
+arch_stat=(log_return-mean(log_return))^2
+Box.test(arch_stat,lag=30,type='Ljung-Box')
+```
+p=0.005906<0.05>>we could reject H0>>Heteroscedastic
+
+```{r}
+#Step 4: [ARMA Part] define p and q
+Box.test(log_return,lag=12,type='Ljung-Box')
+```
+An: Because of 0.4223, we cannot reject H0, there is no serial correlations in the log returns of SBUX.
+
+```{r}
+acf(log_return,plot=TRUE)#MA(0)
+pacf(log_return,plot=TRUE)#AR(0)
+#EACF:
+library(TSA)
+eacf(log_return)#ARMA(0,0)
+```
+
+
+
+```{r}
+#Step 4: Whether we include intercept or not:
+n<-length(log_return)
+t<-mean(log_return)/(sd(log_return)/sqrt(n))
+qt_u<-qt(0.975,n-1,lower.tail=TRUE,log.p=FALSE)
+qt_b<-qt(0.025,n-1,lower.tail=TRUE,log.p=FALSE)
+t#0.7289371
+qt_u#1.964519
+qt_b#-1.964519
+#Not include mean
+```
+An: Because t-statistic lies in the interval, thus, model should not contain mean term.
+
+
+# Step 5: Checking Distribution
+```{r}
+x<-log_return+0.00000000000000000000000001*rnorm(length(log_return),0,1)
+ks.test(x,"pnorm",mean=mean(x),sd=sd(x))
+```
+
+```{r}
+library(nortest)
+ad.test(x)
+```
+```{r}
+library("Rfast")
+library("ramify")
+library("LambertW")
+
+x<-as.matrix(x)
+df=seq(2,8,0.001)       #set the range of degree of freedom (e.g. df=[2,2.001,...,8])
+n=length(df)            
+loglik=rep(0,n)         #Used to store the value of loglikelihood function for different level of df
+for(i in 1:n){
+  fitres=mvt.mle(x,v=df[i])
+  loglik[i]=fitres$loglik
+}                   #For each df, calculate the MLE and loglikelihood function
+loglik<-as.matrix(loglik)
+dfmax=df[argmax(loglik,rows=FALSE)] #Find the maximizier(optimal df)
+fitMLE=mvt.mle(x,v=dfmax) #Estimate the MLE of the parameters
+
+m<-fitMLE$location            #m=mu (location)
+s<-sqrt(fitMLE$scatter[1,1])  #s=lambda (scale parameter)
+print(m)
+print(s)
+print(dfmax)
+
+ks_test_t(x,c(location=m,scale=s,df=dfmax)) #do the testing using ks.test
+```
+```{r}
+library("goftest")
+ad.test((x-m)/s,null="pt",df=dfmax)
+```
+Thus, we select t distribution
+
+# Step 6: Model Construction
+
+```{r}
+#acf(arch_stat,plot=TRUE)#MA(0)
+#pacf(arch_stat,plot=TRUE)#AR(0)
+```
+
+
+```{r}
+# [GARCH Part] define m and s
+#In the text book, 3.5.1 (P116) mentions that "Specify the order of GARCH model is not easy. Only lower order GARCH Models are used in most applications, says, GARCH(1,1), GARCH (2,1), and GARCH(1,2) Models." Thus, in summary, we will test:
+#Summary:
+#1. GARCH(1,1)
+#2. GARCH(2,1)
+#3. GARCH(1,2)
+#4. ARCH(1,0)
+#5. ARCH(2,0)
+#6. iGARCH(1,1)
+```
+
+# GARCH(1,1)+ARMA(0,0)
+
+## with omega
+```{r}
+#Parameter Define and Model Checking
+library(fGarch)
+
+#GARCH(1,1)+ARMA(0,0)
+m0=garchFit(sample~arma(0,0)+garch(1,1),data=log_return,trace=F,include.mean=F,cond.dist="std")
+summary(m0)
+```
+insiginificant omega but it's close to the criteria.
+AIC=-5.718915
+BIC=-5.718915
+
+```{r}
+#Model Checking
+residuals<-residuals(m0,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+The final model is like this:
+
+Method 1:
+For model checking, the p-value of box test on residual is 0.6703; and that of box test on residual square is 0.9899. It passes the model checking.
+
+Method 2:
+For model checking, the p-value of box test on residual after df adjustment is 0.6703357; and that of box test on residual square after df adjustment is 0.989935  It passes the model checking.
+
+
+# sGARCH(1,1)+ARMA(0,0)
+
+## without omega
+```{r}
+library(rugarch)
+
+# Define Garch Model and assume omega=0
+spec1 <- ugarchspec(variance.model = list(model = "sGARCH", 
+                                         garchOrder = c(1, 1), 
+                                         submodel = NULL, 
+                                         external.regressors = NULL, 
+                                         variance.targeting = FALSE), 
+                   mean.model = list(armaOrder = c(0, 0), 
+                                     include.mean = F), 
+                   fixed.pars = list(omega = 0),distribution.model="std")
+
+fit1 <- ugarchfit(spec = spec1, data = log_return)
+
+show(fit1)
+
+```
+AIC=-5.7289; BIC=-5.7045
+alpha 1 (0.005321) insignificant but close to boundary
+Result seams like IGARCH(1,1) without omega
+【REASON???】
+
+```{r}
+#Model Checking
+residuals<-residuals(fit1,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+The final model is like this:
+
+Method 1:
+For model checking, the p-value of box test on residual is 0.5983; and that of box test on residual square is 0.9767. It passes the model checking.
+
+Method 2:
+For model checking, the p-value of box test on residual after df adjustment is 0.5982803; and that of box test on residual square after df adjustment is 0.9766704  It passes the model checking.
+
+# GARCH(2,1)+ARMA(0,0)
+
+```{r}
+#GARCH(2,1)+ARMA(0,0)
+m1=garchFit(sample~arma(0,0)+garch(2,1),data=log_return,trace=F,include.mean=F, cond.dist = "std")
+summary(m1)
+```
+
+alpha is too insignificant>>directly ignore>>GARCH(1,1)
+
+# GARCH(1,2)+ARMA(0,0)
+
+```{r}
+#GARCH(1,2)+ARMA(0,0)
+m2=garchFit(sample~arma(0,0)+garch(1,2),data=log_return,trace=F,include.mean=F)
+summary(m2)
+```
+1. All parameters are NOT significant
+2. For applying backward shifting>> discard beta2>>GARCH(1,1)
+
+# ARCH(1)+ARMA(0,0)
+
+```{r}
+#GARCH(1,0)+ARMA(0,0)
+m3=garchFit(sample~arma(0,0)+garch(1,0),data=log_return,trace=F,include.mean=F,cond.dist="std")
+summary(m3)
+```
+1. alpha1 is not significant>> you should discard it>> so much more rely on variance (beta-part)>> not use this model
+
+# ARCH(2)+ARMA(0,0)
+
+```{r}
+#GARCH(2,0)+ARMA(0,0)=ARCH(2)
+m4=garchFit(sample~arma(0,0)+garch(2,0),data=log_return,trace=F,include.mean=F,cond.dist = "std")
+summary(m4)
+```
+1. alpha1, alpha2 are not significant>>Compare with ARCH(1)>> alpha1 becomes more significant>>
+  GUESS 1) beta part is very important
+  GUESS 2) increase the order of beta
+  
+```{r}
+#Model Checking
+residuals<-residuals(m4,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+The final model is like this:
+
+Method 1:
+For model checking, the p-value of box test on residual is 0.5943; and that of box test on residual square is 0.1264 It passes the model checking.
+
+Method 2:
+For model checking, the p-value of box test on residual after df adjustment is 0.5943492; and that of box test on residual square after df adjustment is 0.1263789  It passes the model checking.
+
+# ARCH(3)+ARMA(0,0)
+```{r}
+#GARCH(3,0)+ARMA(0,0)=ARCH(3)
+m5=garchFit(sample~arma(0,0)+garch(3,0),data=log_return,trace=F,include.mean=FALSE)
+summary(m5)
+```
+1. alpha1, alpha2 are not significant>>Compare with ARCH(1)>> alpha1 becomes more significant>>
+  GUESS 1) beta part is very important
+  GUESS 2) increase the order of beta
+## Remove Alpha1 (Backward sifting)  
+```{r}
+library(rugarch)
+
+# Define Garch Model and assume omega=0
+spec5 <- ugarchspec(variance.model = list(model = "sGARCH", 
+                                         garchOrder = c(3, 0), 
+                                         submodel = NULL, 
+                                         external.regressors = NULL, 
+                                         variance.targeting = FALSE), 
+                   mean.model = list(armaOrder = c(0, 0), 
+                                     include.mean = FALSE), 
+                   fixed.pars = list(alpha2 = 0))
+
+fit5 <- ugarchfit(spec = spec5, data = log_return)
+
+show(fit5)
+
+```
+1. insignificance of Alpha3 increases again>>
+  1) ARCH(1,0)
+  2) We could guess beta-part is much more important instead of alpha-part.
+  
+  
+
+
+# iGARCH(1,1)+ARMA(0,0)
+
+## with omega
+
+```{r}
+library(rugarch)
+spec6<-ugarchspec(variance.model=list(model="iGARCH",garchOrder=c(1,1)),mean.model=list(armaOrder=c(0,0),include.mean=F),distribution.model="std")
+m6<-ugarchfit(spec=spec6,data=log_return)
+print(m6)
+```
+
+constant part is insignificant.
+
+## without omega
+```{r}
+library(rugarch)
+spec7<-ugarchspec(variance.model=list(model="iGARCH",garchOrder=c(1,1)),mean.model=list(armaOrder=c(0,0),include.mean=F),distribution.model="norm",fixed.pars = list(omega = 0))
+m7<-ugarchfit(spec=spec7,data=log_return)
+print(m7)
+
+```
+
+【Why this could give different results with GARCH(1,1) without omega???】
+
+```{r}
+#Model Checking
+residuals<-residuals(m7,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+The final model is like this:
+
+Method 1:
+For model checking, the p-value of box test on residual is 0.5933; and that of box test on residual square is 0.9634 It passes the model checking.
+
+Method 2:
+For model checking, the p-value of box test on residual after df adjustment is 0.5932813; and that of box test on residual square after df adjustment is 0.9633794  It passes the model checking.
+
+# GARCH-M(1,1)+ARMA(0,0)
+
+## with omega
+```{r}
+library(rugarch)
+condVar <- sigma(m7)
+spec7_m <- ugarchspec(variance.model = list(model = "iGARCH", garchOrder = c(1, 1)),
+                       mean.model = list(armaOrder = c(0, 0), include.mean = T, 
+                                         external.regressors = matrix(condVar)),
+                       distribution.model = "std")
+m7_m<-ugarchfit(spec=spec7_m,data=log_return)
+print(m7_m)
+
+```
+
+```{r}
+#Model Checking
+residuals<-residuals(m7_m,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20-2)# 2 is because of mu and mxreg1
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+The final model is like this:
+
+Method 1:
+For model checking, the p-value of box test on residual is 0.6694; and that of box test on residual square is 0.9937 It passes the model checking.
+
+Method 2:
+For model checking, the p-value of box test on residual after df adjustment is 0.5406191; and that of box test on residual square after df adjustment is 0.9828911  It passes the model checking.
+
+## without omega
+```{r}
+library(rugarch)
+condVar <- sigma(m7)
+spec7_m2 <- ugarchspec(variance.model = list(model = "iGARCH", garchOrder = c(1, 1)),
+                       mean.model = list(armaOrder = c(0, 0), include.mean = TRUE, 
+                                         external.regressors = matrix(condVar)),
+                       distribution.model = "std",fixed.pars=list(omega=0))
+m7_m2<-ugarchfit(spec=spec7_m2,data=log_return)
+print(m7_m2)
+
+```
+
+alpha1 becomes more insignificant>>try to add magnitude.
+
+```{r}
+#Model Checking
+residuals<-residuals(m7_m2,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20-2)# 2 is because of mu and mxreg1
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+The final model is like this:
+
+Method 1:
+For model checking, the p-value of box test on residual is 0.6694; and that of box test on residual square is 0.9937 It passes the model checking.
+
+Method 2:
+For model checking, the p-value of box test on residual after df adjustment is 0.4778099; and that of box test on residual square after df adjustment is 0.9168002  It passes the model checking.
+
+【When we should contain miu or not】
+
+
+
+# eGARCH(1,1)+ARMA(0,0)
+```{r}
+library(rugarch)
+spec8<-ugarchspec(variance.model=list(model="eGARCH",garchOrder=c(1,1)),mean.model=list(armaOrder=c(0,0),include.mean=FALSE),distribution.model="std")
+m8<-ugarchfit(spec=spec8,data=log_return)
+print(m8)
+
+```
+
+alpha1 is significant==leverage coefficient is significant>> show the effect of ibsilong lag 1== smaller>>larger contributor
+
+gamma1 is much more significant== shows magnitude effect>>create significant absolutely mean reverting phenomenon of absolute ibsilong part 
+
+```{r}
+#Model Checking
+residuals<-residuals(m8,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+The final model is like this:
+
+Method 1:
+For model checking, the p-value of box test on residual is 0.6851; and that of box test on residual square is 0.9823 It passes the model checking.
+
+Method 2:
+For model checking, the p-value of box test on residual after df adjustment is 0.6851151; and that of box test on residual square after df adjustment is 0.9823285  It passes the model checking.
+
+# GJRGARCH(1,1)+ARMA(0,0)
+Different Scenarios, different volatility
+
+# with alpha1=without alpha1
+```{r}
+library(rugarch)
+spec9<-ugarchspec(variance.model=list(model="gjrGARCH",garchOrder=c(1,1)),mean.model=list(armaOrder=c(0,0),include.mean=FALSE),distribution.model="std",fixed.pars = list(alpha1 = 0))
+m9<-ugarchfit(spec=spec9,data=log_return)
+print(m9)
+```
+gamma1 is sifnificant>> which is used to ensure that the prior negative return have higher impact on the volatility
+Even though alpha1 is too insignificant to contain it in the model, it is still useful because alpha1 still equal to 0 in the final fitting result.
+
+
+```{r}
+#Model Checking
+residuals<-residuals(m9,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+The final model is like this:
+
+Method 1:
+For model checking, the p-value of box test on residual is 0.635; and that of box test on residual square is 0.993 It passes the model checking.
+
+Method 2:
+For model checking, the p-value of box test on residual after df adjustment is 0.6350328; and that of box test on residual square after df adjustment is 0.9929559  It passes the model checking.
+
+```{r}
+library(openxlsx)
+write.xlsx(residuals,file="standardized_residual_Finance.xlsx")
+```
+
+# CGARCH(1,1)+ ARMA(0,0)
+
+## with eta21
+```{r}
+library(rugarch)
+spec10<-ugarchspec(variance.model=list(model="csGARCH",garchOrder=c(1,1)),mean.model=list(armaOrder=c(0,0),include.mean=FALSE),distribution.model="std")
+m10<-ugarchfit(spec=spec10,data=log_return)
+print(m10)
+```
+
+insignificant eta21, which shows the adjusted effect of leaving the long-term mean in the long term
+
+```{r}
+#Model Checking
+residuals<-residuals(m10,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+The final model is like this:
+
+Method 1:
+For model checking, the p-value of box test on residual is 0.6104; and that of box test on residual square is 0.9807 It passes the model checking.
+
+Method 2:
+For model checking, the p-value of box test on residual after df adjustment is 0.6104499; and that of box test on residual square after df adjustment is 0.9807012  It passes the model checking.
+
+
+## without omega
+```{r}
+library(rugarch)
+spec11<-ugarchspec(variance.model=list(model="csGARCH",garchOrder=c(1,1)),mean.model=list(armaOrder=c(0,0),include.mean=FALSE),distribution.model="std",fixed.pars = list(omega=0))
+m11<-ugarchfit(spec=spec11,data=log_return)
+print(m11)
+```
+
+Alpha1 and Beta1 becomes greatly insignificant. It is not a worthful trade!
+
+
+# CGARCH(0,1)+ ARMA(0,0)
+```{r}
+library(rugarch)
+spec12<-ugarchspec(variance.model=list(model="csGARCH",garchOrder=c(0,1)),mean.model=list(armaOrder=c(0,0),include.mean=FALSE),distribution.model="norm")
+m12<-ugarchfit(spec=spec12,data=log_return)
+print(m12)
+```
+
+beta 1 is insignificant>> Not consider this model
+
+```{r}
+#Model Checking
+residuals<-residuals(m12,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+The final model is like this:
+
+Method 1:
+For model checking, the p-value of box test on residual is 0.6549; and that of box test on residual square is 0.9899 It passes the model checking.
+
+Method 2:
+For model checking, the p-value of box test on residual after df adjustment is 0.6549474; and that of box test on residual square after df adjustment is 0.989923  It passes the model checking.
+
+# CGARCH(1,0)+ ARMA(0,0)
+```{r}
+library(rugarch)
+spec13<-ugarchspec(variance.model=list(model="csGARCH",garchOrder=c(1,0)),mean.model=list(armaOrder=c(0,0),include.mean=FALSE),distribution.model="norm")
+m13<-ugarchfit(spec=spec13,data=log_return)
+print(m13)
+```
+Not converge>> Not consider
+
+# RCA (1)
+```{r}
+library(rugarch)
+spec14<-ugarchspec(variance.model=list(model="rca",garchOrder=c(1)),mean.model=list(armaOrder=c(0,0),include.mean=FALSE),distribution.model="norm")
+m14<-ugarchfit(spec=spec14,data=log_return)
+print(m14)
+```
+
+# Stochastic Volatility Model
+```{r}
+library(stochvol)
+fit <- svsample(log_return, priormu = c(mean(log_return), 0.01))
+summary(fit)
+
+```
+
+```{r}
+plot(fit)
+```
+
+# Threshold ARIMA
+```{r}
+#method 2: scatter-line plot
+library("quantmod")
+library("tsDyn")
+library("stats")
+library("nonlinearTseries")
+library("datasets")
+library("NTS")
+{#par(mfrow=c(2,2))
+  scatter.smooth(Lag(log_return, 1), log_return, span = 2/3, degree = 1,
+                 family = c("symmetric", "gaussian"), evaluation = 50, 
+  xlab = "t-1", ylab = "t")
+  scatter.smooth(Lag(log_return, 2), log_return, span = 2/3, degree = 1,
+                 family = c("symmetric", "gaussian"), evaluation = 50, 
+  xlab = "t-2", ylab = "t")
+  scatter.smooth(Lag(log_return, 3), log_return, span = 2/3, degree = 1,
+                 family = c("symmetric", "gaussian"), evaluation = 50, 
+  xlab = "t-3", ylab = "t")
+  scatter.smooth(Lag(log_return, 4), log_return, span = 2/3, degree = 1,
+                 family = c("symmetric", "gaussian"), evaluation = 50, 
+  xlab = "t-4", ylab = "t")
+}
+```
+1. Scatter Points: It is a proof of white noise.
+2. Line: It seems like there is no non-linear relationship between parameters.
+
+```{r}
+#method3: statistical test:
+#Sometimes however it happens so, that it’s not that simple to decide whether this type of nonlinearity is present. In this case, we’d have to run a statistical test — this approach is the most recommended by both Hansen’s and Tsay’s procedures. In order to do it, however, it’s good to first establish what lag order we are more or less talking about. We will use Average Mutual Information for this, and we will limit the order to its first local minimum
+mutualInformation(log_return)
+```
+according to the above figure, which shows the relation in entropy dimension. It's an indicator about their correlation. Another evidence of White Noise>>NOT NEED TO CHECK WHETHER IT IS STEAR OR AR!!!
+【tell them this information!】
+
+# Threshold ARMA
+
+## Without Considering HETEROPART
+```{r}
+# checking the order
+## Method 1:
+for (d in 1:3){
+  for (p in 1:3){
+    test_result <- thr.test(log_return, p=p, d=d)
+    F_ratio <- test_result$F.ratio
+    df1 <- test_result$df[1]
+    df2 <- test_result$df[2]
+    p_value <- 1 - pf(F_ratio, df1, df2)  # 计算 p-value
+    cat("p = ", p, " d = ", d, " F-ratio = ", F_ratio, " P-value = ", p_value, "\n")
+  }
+}
+```
+According to the above result, SETAR(1,1) & SETAR(2,1) & SETAR(3,1) 
+Those shows non-linearity property
+
+```{r}
+## Method 2:
+setarTest(log_return, m=3, nboot=400)
+setarTest(log_return, m=3, nboot=400, test='2vs3')
+```
+Thus, we only need to consider the one threshold, instead of 2- or 3-threshold cases.
+
+```{r}
+# Identify mL(order of Lower) mH(order of Higher) thDelay(lag of threshold) th(threshold result) pooled-AIC(AIC part result)
+selectSETAR(log_return, m=3, thDelay=1:2)
+
+```
+
+```{r}
+tarmodel <- setar(log_return, mL=1, mH=2, thDelay = 2, th=0.003096540)
+summary(tarmodel)
+```
+```{r}
+#Model Checking
+residuals<-residuals(tarmodel,standardize=TRUE)
+#Method 1: Teacher uses:
+Box.test(residuals,lag=20,type='Ljung-Box')
+Box.test(residuals^2,lag=20,type='Ljung-Box')
+#Method 2: TA uses (df adjustment):
+df<-(20-5)# 0 is because of no mu
+box_arma<-Box.test(residuals,lag=20,type='Ljung-Box')
+pv_arma<-(1-pchisq(box_arma$statistic,df))
+print(pv_arma)
+box_garch<-Box.test(residuals^2,lag=20,type='Ljung-Box')
+pv_garch<-(1-pchisq(box_garch$statistic,df))
+print(pv_garch)
+```
+
+# Finally, we use GJRGARCH to solve this problem
+
+
+# Quantitative Analysis
+```{r}
+data_forecast_finance_FY <- read.delim("C:/Users/20117/Desktop/Time Series Project/data_forecast_finance_FY.txt")
+date=data_forecast_finance_FY[1]
+realReturn=data_forecast_finance_FY[8]
+predMean=data_forecast_finance_FY[9]
+predSig=data_forecast_finance_FY[10]
+df<-7.996378
+#5%
+alpha <- 0.2
+t_lower<- qt(alpha / 2, df, lower.tail = TRUE)
+t_upper<- qt(1-alpha / 2, df, lower.tail = TRUE)
+UpredInterval=predMean+predSig*t_upper
+DpredInterval=predMean+predSig*t_lower
+
+tag=(realReturn<UpredInterval)& (realReturn<DpredInterval)
+sum(tag)
+```
+
+```{r}
+Group1<-UpredInterval[[1]]
+Group2<-DpredInterval[[1]]
+Group3<-realReturn[[1]]
+datalist<-list(UpperBound=Group1,LowerBound=Group2, RealReturn=Group3)
+boxplot(datalist,main="Combined Box Plot",ylab="Values",names=c("Upper Bound","Lower Bound","Real Value"),col=c("red","green","blue"))
+```
+```{r}
+time<-date[[1]]
+time<-as.Date(time,format="%Y-%m-%d")
+plot(time,Group1,type="l",col="red",ylim=c(min(Group1,Group2,Group3),max(Group1,Group2,Group3)),xlab="Time",ylab="Value",main="Multiple Line Plots",xaxt='n')
+lines(time,Group2,col="green")
+lines(time,Group3,col="blue")
+
+english_months <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+library(zoo)
+months <- seq(from=min(time), to=max(time), by="month")
+months <- as.Date(format(months, "%Y-%m-01"))
+month_labels <- english_months[as.integer(format(months, "%m"))]
+axis(1, at=months, labels=month_labels, cex.axis=0.8)
+
+```
+
+
+```{r}
+#10%
+alpha <- 0.1
+t_lower<- qt(alpha / 2, df, lower.tail = TRUE)
+t_upper<- qt(1-alpha / 2, df, lower.tail = TRUE)
+UpredInterval=predMean+predSig*t_upper
+DpredInterval=predMean+predSig*t_lower
+
+tag=(realReturn<UpredInterval)& (realReturn<DpredInterval)
+sum(tag)
+
+```
+
+
+
+```{r}
+#20%
+alpha <- 0.9
+t_lower<- qt(alpha / 2, df, lower.tail = TRUE)
+t_upper<- qt(1-alpha / 2, df, lower.tail = TRUE)
+UpredInterval=predMean+predSig*t_upper
+DpredInterval=predMean+predSig*t_lower
+
+tag=(realReturn<UpredInterval)& (realReturn<DpredInterval)
+sum(tag)
+```
+
+
+
